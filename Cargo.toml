@@ -1,0 +1,20 @@
+[package]
+name = "isolation_forest"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+ndarray = "0.15.3"
+rand="0.8.4"
+rand_distr = "0.4.2"
+# ndarray-linalg = { version = "0.14.1", features = ["intel-mkl"] }
+ndarray-rand = "0.14.0"
+log = "0.4.14"
+simple_logger = "1.16.0"
+env_logger = "0.9.0"
+statrs = "0.15.0"
+csv = "1.1.6"
+
+

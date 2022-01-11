@@ -1,0 +1,7 @@
+; id = {0x00000089}, range = [0x00007ff8003263aa-0x00007ff8003263b6), name="dyld4::LibSystemHelpers::exit(int) const", mangled="_ZNK5dyld416LibSystemHelpers4exitEi"
+; Source location: unknown
+7FF81882C3AA: 55                         pushq  %rbp
+7FF81882C3AB: 48 89 E5                   movq   %rsp, %rbp
+7FF81882C3AE: 89 F7                      movl   %esi, %edi
+7FF81882C3B0: E8 B3 4C 00 00             callq  0x7ff818831068  ; symbol stub for: exit
+7FF81882C3B5: 90                         nop    
