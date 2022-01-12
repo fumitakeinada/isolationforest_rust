@@ -231,7 +231,7 @@ impl IsolationTreeEnsemble {
     }
 
     // 行毎の長さの平均を算出
-    fn get_path_lenghth_mean(&self, row:ArrayView1<f64>)-> f64{
+    fn get_path_length_mean(&self, row:ArrayView1<f64>)-> f64{
         let mut path:Vec<f64>= Vec::new();
 
         for tree in self.tree_set.iter() {
@@ -258,7 +258,7 @@ impl IsolationTreeEnsemble {
         // 各データをツリーに当てはめる
         // スレッド化検討
         for i in x.rows(){
-            let path_mean:f64 = self.get_path_lenghth_mean(i);
+            let path_mean:f64 = self.get_path_length_mean(i);
             paths_mean.push(path_mean);
         }
         paths_mean
