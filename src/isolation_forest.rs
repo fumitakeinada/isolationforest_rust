@@ -107,6 +107,8 @@ impl IsolationTree {
         // 行毎に対象の変数が閾値より小さいか大きいかで分割        
         let mut x_left:Array2<f64> = Array::zeros((0,x.ncols())); //　行数0で初期化
         let mut x_right:Array2<f64> = Array::zeros((0,x.ncols())); //　行数0で初期化
+        
+        // スレッド化検討もしくは高速な並べ替え検討
         for i in x.rows(){
             if i.to_vec()[split_att] < split_val {
                 // 行追加
@@ -123,6 +125,7 @@ impl IsolationTree {
         let mut right = IsolationTree::new(self.height + 1, self.height_limit);
 
         // 分岐条件を設定し、枝を戻す。
+        // 要スレッド化
         let left_node = left.fit(x_left)?;
         let right_node = right.fit(x_right)?;
         let node = IsolationNode::new_decision(left_node, right_node, split_att, split_val);
@@ -187,6 +190,23 @@ impl IsolationTreeEnsemble {
         return (length, leafsize);
     }
 
+    // 一つのツリー作成
+    fn make_isotree(& mut self, x:&Array2<f64>, height_limit:u32) -> Result<IsolationNode, ShapeError>{
+        // 指定の件数分をランダムにデータ抽出（重複あり）
+        let mut rng = thread_rng();
+        let data_range = Uniform::new_inclusive(0, x.nrows() - 1);
+        let data_rows: Vec<usize> = data_range.sample_iter(&mut rng).take(self.sample_size).collect();
+        let mut random_data:Array2<f64> = Array::zeros((0,x.ncols()));
+        for j in data_rows.iter(){
+            random_data.push_row(x.row(*j))?;
+        }
+        
+        // 一つのIsolationTreeを作成
+        let mut isotree = IsolationTree::new(0, height_limit);
+        let data_node = isotree.fit(random_data)?;
+        Ok(*data_node)
+    }
+
     // 学習
     pub fn fit(& mut self, x:&Array2<f64>) -> Result<(), ShapeError>{
 
@@ -199,24 +219,35 @@ impl IsolationTreeEnsemble {
         let height_limit:u32 = (self.sample_size as f64).log2().ceil() as u32;
 
         // 指定数のIsolationTreeの作成
+        // 要スレッド化
         for _i in 0..self.n_trees {
-            // 指定の件数分をランダムにデータ抽出（重複あり）
-            let mut rng = thread_rng();
-            let data_range = Uniform::new_inclusive(0, x.nrows() - 1);
-            let data_rows: Vec<usize> = data_range.sample_iter(&mut rng).take(self.sample_size).collect();
-            let mut random_data:Array2<f64> = Array::zeros((0,x.ncols()));
-            for j in data_rows.iter(){
-                random_data.push_row(x.row(*j))?;
-            }
-
-            // 一つのIsolationTreeを作成
-            let mut isotree = IsolationTree::new(0, height_limit);
-            let data_node = isotree.fit(random_data)?;
-
+            // 一つのツリーを作成
+            let data_node = self.make_isotree(x, height_limit)?;
+            
             // IsolationTreeを集合に加える
-            self.tree_set.push(*data_node);
+            self.tree_set.push(data_node);
         }
         Ok(())
+    }
+
+    // 行毎の長さの平均を算出
+    fn get_path_lenghth_mean(&self, row:ArrayView1<f64>)-> f64{
+        let mut path:Vec<f64>= Vec::new();
+
+        for tree in self.tree_set.iter() {
+            let result = IsolationTreeEnsemble::tree_path_length(Box::new(tree), row);
+            // 孤立する前に既定の深さに達した場合、調整
+            let result_leaf_size = result.1;
+            let pathlength = (result.0 as f64) + self.c(result_leaf_size);
+            path.push(pathlength);
+        }
+        // データごとの平均値の算出
+        let mut sum: f64 = 0.0;
+        for j in path.iter() {
+            sum += *j as f64;
+        }
+        let path_mean:f64 = sum/(path.len() as f64);
+        path_mean
     }
 
     // データ毎の長さの平均を算出
@@ -225,22 +256,9 @@ impl IsolationTreeEnsemble {
         let mut paths_mean:Vec<f64> = Vec::new();
 
         // 各データをツリーに当てはめる
+        // スレッド化検討
         for i in x.rows(){
-            let mut path:Vec<f64>= Vec::new();
-
-            for tree in self.tree_set.iter() {
-                let result = IsolationTreeEnsemble::tree_path_length(Box::new(tree), i);
-                // 孤立する前に既定の深さに達した場合、調整
-                let result_leaf_size = result.1;
-                let pathlength = (result.0 as f64) + self.c(result_leaf_size);
-                path.push(pathlength);
-            }
-            // データごとの平均値の算出
-            let mut sum: f64 = 0.0;
-            for j in path.iter() {
-                sum += *j as f64;
-            }
-            let path_mean:f64 = sum/(path.len() as f64);
+            let path_mean:f64 = self.get_path_lenghth_mean(i);
             paths_mean.push(path_mean);
         }
         paths_mean
