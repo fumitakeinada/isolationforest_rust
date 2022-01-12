@@ -37,10 +37,10 @@ impl IsolationNode {
         split_val: f64 // 分割時の閾値
         ) -> Box<IsolationNode>{
         let node = IsolationNode::Decision {
-            left: left,
-            right: right,
-            split_att: split_att,
-            split_val: split_val,
+            left: left, // 左ノード(閾値より値が小さい)
+            right: right, // 右ノード(閾値より値が大きいか同じ)
+            split_att: split_att, // 対象列
+            split_val: split_val, // 閾値
         };
         Box::new(node)
     }
