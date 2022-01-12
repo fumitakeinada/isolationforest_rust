@@ -33,14 +33,14 @@ impl IsolationNode {
     fn new_decision(
         left:Box<IsolationNode>, 
         right:Box<IsolationNode>, 
-        split_att:usize, // どの変数を選択したか
-        split_val: f64 // 分割時の閾値
+        split_att:usize,
+        split_val: f64
         ) -> Box<IsolationNode>{
         let node = IsolationNode::Decision {
-            left: left, // 左ノード(閾値より値が小さい)
-            right: right, // 右ノード(閾値より値が大きいか同じ)
-            split_att: split_att, // 対象列
-            split_val: split_val, // 閾値
+            left: left,
+            right: right,
+            split_att: split_att,
+            split_val: split_val,
         };
         Box::new(node)
     }
