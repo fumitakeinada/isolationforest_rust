@@ -1,6 +1,6 @@
 
 extern crate ndarray;
-use ndarray::{Array,ArrayView1,Array2,ShapeError};
+use ndarray::{Array,ArrayView1,Array2,Axis,ShapeError};
 
 extern crate rand;
 use rand::{thread_rng, Rng};
@@ -278,12 +278,15 @@ impl IsolationTreeEnsembleThread {
     // データ毎の長さの平均を算出
     fn path_length_mean(&self, x:Array2<f64>) -> Vec<f64>{
         // 各データの深さの平均の格納場所
-        let mut paths_mean:Vec<f64> = Vec::new();
+        //let mut paths_mean:Vec<f64> = Vec::new();
+        let mut paths_mean:Vec<f64> = Vec::with_capacity(x.nrows());
 
         // 各データをツリーに当てはめる
         // スレッド化検討
-        for i in x.rows(){
-            let path_mean:f64 = self.get_path_length_mean(i);
+        let mut i:usize = 0;
+
+        for x_row in x.rows(){
+            let path_mean:f64 = self.get_path_length_mean(x_row);
             paths_mean.push(path_mean);
         }
         paths_mean
