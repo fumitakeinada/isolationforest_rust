@@ -9,6 +9,13 @@ use rand_distr::{Distribution};
 
 extern crate statrs;
 
+
+use std::thread;
+//use std::time::Duration;
+use std::sync::{Arc, Mutex};
+//use std::rc::Rc;
+
+
 // ノードデータ設定
 // 再帰処理が入るので、enumで定義
 #[derive(Debug)]
@@ -59,6 +66,7 @@ impl IsolationNode {
         Box::new(node)
     }
 }
+
 
 // アイソレーションフォレストの木の処理
 pub struct IsolationTree {
@@ -135,23 +143,24 @@ impl IsolationTree {
 
 
 
-pub struct IsolationTreeEnsemble {
+// アンサンブル学習用のツリー集合
+pub struct IsolationTreeEnsembleThread {
     sample_size: usize,
     n_trees: usize,
-    tree_set: Vec<IsolationNode>,
+    tree_set: Arc<Mutex<Vec<IsolationNode>>>,
 }
 
 
-impl IsolationTreeEnsemble {
+impl IsolationTreeEnsembleThread {
     pub fn new(sample_size:usize, n_trees:usize) -> Self{
-        IsolationTreeEnsemble {
+        IsolationTreeEnsembleThread {
             sample_size: sample_size, 
             n_trees:n_trees, 
-            tree_set:Vec::new(),
+            tree_set: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
-    fn c(&self, sample_size:usize) -> f64{
+    fn c(sample_size:usize) -> f64{
         const EULER_GAMMA:f64 = 0.5772156649; // Euler-Mascheroni constant
     
         if sample_size > 1 {
@@ -173,12 +182,12 @@ impl IsolationTreeEnsemble {
             IsolationNode::Decision {left, right, split_att, split_val}=> {
                 // 対象の変数を取り出し、閾値の大小で枝を振り分ける。
                 if x.to_vec()[*split_att] < *split_val {
-                    let result = IsolationTreeEnsemble::tree_path_length(Box::new(&(*left)), x);
+                    let result = Self::tree_path_length(Box::new(&(*left)), x);
                     length = result.0 + 1;
                     leafsize = result.1;
                 }
                 else {
-                    let result = IsolationTreeEnsemble::tree_path_length(Box::new(&(*right)), x);
+                    let result = Self::tree_path_length(Box::new(&(*right)), x);
                     length = result.0 + 1;
                     leafsize = result.1;
                 }
@@ -190,12 +199,11 @@ impl IsolationTreeEnsemble {
         return (length, leafsize);
     }
 
-    // 一つのツリー作成
-    fn make_isotree(& mut self, x:&Array2<f64>, height_limit:u32) -> Result<IsolationNode, ShapeError>{
+    fn make_isotree(x:&Arc<Array2<f64>>, sample_size:usize, height_limit:u32) -> Result<IsolationNode, ShapeError>{
         // 指定の件数分をランダムにデータ抽出（重複あり）
         let mut rng = thread_rng();
         let data_range = Uniform::new_inclusive(0, x.nrows() - 1);
-        let data_rows: Vec<usize> = data_range.sample_iter(&mut rng).take(self.sample_size).collect();
+        let data_rows: Vec<usize> = data_range.sample_iter(&mut rng).take(sample_size).collect();
         let mut random_data:Array2<f64> = Array::zeros((0,x.ncols()));
         for j in data_rows.iter(){
             random_data.push_row(x.row(*j))?;
@@ -207,8 +215,9 @@ impl IsolationTreeEnsemble {
         Ok(*data_node)
     }
 
+
     // 学習
-    pub fn fit(& mut self, x:&Array2<f64>) -> Result<(), ShapeError>{
+    pub fn fit(& mut self, x:Array2<f64>) -> Result<(), ShapeError>{
 
         // self.sample_size==0の場合は、入力データのデータ数をサンプルサイズに変更する。
         if self.sample_size == 0{
@@ -217,15 +226,30 @@ impl IsolationTreeEnsemble {
 
         // 深さの上限の設定
         let height_limit:u32 = (self.sample_size as f64).log2().ceil() as u32;
+        let sample_size = self.sample_size;
 
         // 指定数のIsolationTreeの作成
-        // 要スレッド化
-        for _i in 0..self.n_trees {
-            // 一つのツリーを作成
-            let data_node = self.make_isotree(x, height_limit)?;
-            
-            // IsolationTreeを集合に加える
-            self.tree_set.push(data_node);
+        let n_trees = self.n_trees;
+        let x_data = Arc::new(x);
+        let tree_set = &self.tree_set;
+
+        // スレッド化
+        for _ in 0..n_trees{
+            let hdl = thread::spawn({
+                let x_data = x_data.clone();
+                let tree_set = tree_set.clone();
+                    move || {
+                        let mut tree_set = tree_set.lock().unwrap();
+                        let data = Self::make_isotree(&x_data, sample_size, height_limit);
+                        match data {
+                            Ok(ret) => (*tree_set).push(ret),
+                            Err(error) => {
+                                todo!();
+                            }
+                        };
+                }
+            });
+            hdl.join().unwrap();
         }
         Ok(())
     }
@@ -234,11 +258,12 @@ impl IsolationTreeEnsemble {
     fn get_path_length_mean(&self, row:ArrayView1<f64>)-> f64{
         let mut path:Vec<f64>= Vec::new();
 
-        for tree in self.tree_set.iter() {
-            let result = IsolationTreeEnsemble::tree_path_length(Box::new(tree), row);
+        // 要スレッド化
+        for tree in self.tree_set.lock().unwrap().iter() {
+            let result = Self::tree_path_length(Box::new(tree), row);
             // 孤立する前に既定の深さに達した場合、調整
             let result_leaf_size = result.1;
-            let pathlength = (result.0 as f64) + self.c(result_leaf_size);
+            let pathlength = (result.0 as f64) + Self::c(result_leaf_size);
             path.push(pathlength);
         }
         // データごとの平均値の算出
@@ -267,14 +292,15 @@ impl IsolationTreeEnsemble {
     // 異常度の算出
     pub fn anomaly_score(&mut self, x:Array2<f64>)  -> Vec<f64> {
         // 各データの深さの平均を算出し、異常値スコアを算出
-        let mut anomaly_scores:Vec<f64> = Vec::new();
-        
         let paths_mean = self.path_length_mean(x);
-        for l in paths_mean.iter() {
+        let mut anomaly_scores:Vec<f64> = Vec::with_capacity(paths_mean.len());
 
-            let c_val = self.c(self.sample_size);
+        for (i,l) in paths_mean.iter().enumerate() {
+
+            let c_val = Self::c(self.sample_size);
             let score =  (2. as f64).powf((-1.* l)/(c_val as f64));
-            anomaly_scores.push(score);
+
+            anomaly_scores.insert(i,score);
         }
         anomaly_scores
     }

@@ -43,8 +43,8 @@ fn main() -> Result<(),Error> {
     let csv_rows:usize = 2;
 
     let arr_train = trans_csv_to_arr(train_csv_file.to_string(), csv_rows).unwrap();
-    let mut isotreeens = isolation_forest::IsolationTreeEnsemble::new(0, 400);
-    isotreeens.fit(&arr_train);
+    let mut isotreeens = isolation_forest::IsolationTreeEnsembleThread::new(0, 400);
+    isotreeens.fit(arr_train);
 
 
     let arr_test_normal = trans_csv_to_arr(test_normal_csv_file.to_string(),csv_rows).unwrap();
