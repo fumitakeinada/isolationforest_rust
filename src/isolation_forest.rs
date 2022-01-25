@@ -190,9 +190,9 @@ impl IsolationTreeEnsembleThread {
 
                 let result = Self::tree_path_length(Box::new(direction), x);
                 let length = result.0 + 1;
-                let leafsize = result.1;
+                let branch_size = result.1;
         
-                return (length, leafsize);
+                return (length, branch_size);
             }
             IsolationNode::Leaf {size, data:_ } => {
                 return (1, *size);
@@ -263,8 +263,8 @@ impl IsolationTreeEnsembleThread {
         for tree in tree_set.iter() {
             let result = Self::tree_path_length(Box::new(tree), row);
             // 孤立する前に既定の深さに達した場合、調整
-            let result_leaf_size = result.1;
-            let pathlength = (result.0 as f64) + Self::c(result_leaf_size);
+            let result_branch_size = result.1;
+            let pathlength = (result.0 as f64) + Self::c(result_branch_size);
             path.push(pathlength);
         }
         // データごとの平均値の算出
