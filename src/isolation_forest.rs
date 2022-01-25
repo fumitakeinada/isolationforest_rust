@@ -1,6 +1,6 @@
 
 extern crate ndarray;
-use ndarray::{Array,ArrayView1,Array2,Axis,ShapeError};
+use ndarray::{Array,ArrayView1,Array2,ShapeError};
 
 extern crate rand;
 use rand::{thread_rng, Rng};
@@ -28,9 +28,10 @@ pub enum IsolationNode {
         split_val: f64, // 境界値
     },
     // 葉の情報
+    // 末端のデータ自体は必要ないので、再構成する際はNoneを使用する。
     Leaf {
         size: usize, // データサイズ（行数）
-        data: Array2<f64>, // データ
+        data: Option<Array2<f64>>, // データ
     }
 }
 
@@ -52,11 +53,10 @@ impl IsolationNode {
         Box::new(node)
     }
 
-
     // 葉（末端）の場合の処理
     fn new_leaf(
         size:usize, 
-        data:Array2<f64>
+        data:Option<Array2<f64>>
         ) -> Box<IsolationNode>{
 
         let node = IsolationNode::Leaf {
@@ -85,7 +85,7 @@ impl IsolationTree {
         
         // データが孤立するか、指定の深さになった場合、葉を戻す。
          if x.nrows() <= 1 || self.height >= self.height_limit {
-            let node = IsolationNode::new_leaf(x.nrows(), x);
+            let node = IsolationNode::new_leaf(x.nrows(), Some(x));
             return Ok(node);
          }
         
@@ -174,29 +174,30 @@ impl IsolationTreeEnsembleThread {
     }
 
     // データを渡して長さを返す
-    pub fn tree_path_length(node:Box<&IsolationNode>, x:ArrayView1<f64>)->(usize, usize){
+    fn tree_path_length(node:Box<&IsolationNode>, x:ArrayView1<f64>)->(usize, usize){
         // ノードを枝か葉で分ける
-        let mut length = 0;
-        let mut leafsize = 0;
+
         match *node {
             IsolationNode::Decision {left, right, split_att, split_val}=> {
+                let direction;
                 // 対象の変数を取り出し、閾値の大小で枝を振り分ける。
                 if x.to_vec()[*split_att] < *split_val {
-                    let result = Self::tree_path_length(Box::new(&(*left)), x);
-                    length = result.0 + 1;
-                    leafsize = result.1;
+                    direction = left;
                 }
                 else {
-                    let result = Self::tree_path_length(Box::new(&(*right)), x);
-                    length = result.0 + 1;
-                    leafsize = result.1;
+                    direction = right;
                 }
+
+                let result = Self::tree_path_length(Box::new(direction), x);
+                let length = result.0 + 1;
+                let leafsize = result.1;
+        
+                return (length, leafsize);
             }
             IsolationNode::Leaf {size, data:_ } => {
                 return (1, *size);
             }
         }
-        return (length, leafsize);
     }
 
     fn make_isotree(x:&Arc<Array2<f64>>, sample_size:usize, height_limit:u32) -> Result<IsolationNode, ShapeError>{
@@ -257,9 +258,9 @@ impl IsolationTreeEnsembleThread {
     // 行毎の長さの平均を算出
     fn get_path_length_mean(&self, row:ArrayView1<f64>)-> f64{
         let mut path:Vec<f64>= Vec::new();
-
+        let tree_set = self.tree_set.lock().unwrap();
         // 要スレッド化
-        for tree in self.tree_set.lock().unwrap().iter() {
+        for tree in tree_set.iter() {
             let result = Self::tree_path_length(Box::new(tree), row);
             // 孤立する前に既定の深さに達した場合、調整
             let result_leaf_size = result.1;
@@ -278,16 +279,13 @@ impl IsolationTreeEnsembleThread {
     // データ毎の長さの平均を算出
     fn path_length_mean(&self, x:Array2<f64>) -> Vec<f64>{
         // 各データの深さの平均の格納場所
-        //let mut paths_mean:Vec<f64> = Vec::new();
         let mut paths_mean:Vec<f64> = Vec::with_capacity(x.nrows());
 
         // 各データをツリーに当てはめる
         // スレッド化検討
-        let mut i:usize = 0;
-
-        for x_row in x.rows(){
-            let path_mean:f64 = self.get_path_length_mean(x_row);
-            paths_mean.push(path_mean);
+        for i in 0..x.nrows(){
+            let path_mean:f64 = self.get_path_length_mean(x.row(i));
+            paths_mean.insert(i,path_mean);
         }
         paths_mean
     }
@@ -297,14 +295,14 @@ impl IsolationTreeEnsembleThread {
         // 各データの深さの平均を算出し、異常値スコアを算出
         let paths_mean = self.path_length_mean(x);
         let mut anomaly_scores:Vec<f64> = Vec::with_capacity(paths_mean.len());
-
+        let sample_size = self.sample_size;
+ 
         for (i,l) in paths_mean.iter().enumerate() {
-
-            let c_val = Self::c(self.sample_size);
+            let c_val = Self::c(sample_size);
             let score =  (2. as f64).powf((-1.* l)/(c_val as f64));
-
-            anomaly_scores.insert(i,score);
+            anomaly_scores.insert(i, score);
         }
+
         anomaly_scores
     }
 
