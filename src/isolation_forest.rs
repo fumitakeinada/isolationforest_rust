@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 
 // ノードデータ設定
 // 再帰処理が入るので、enumで定義
+// 途中は2分木要素、末端は葉要素として定義
 #[derive(Debug)]
 pub enum IsolationNode {
     // 2分木の枝の情報
@@ -28,9 +29,10 @@ pub enum IsolationNode {
         split_val: f64, // 境界値
     },
     // 葉の情報
+    // 一つになるか、深さで打ち切りになるかで葉になるので、その時のデータのサイズ（行数）を記録
     // 末端のデータ自体は必要ない
     Leaf {
-        size: usize, // データサイズ（行数）
+        size: usize, // 末端として残ったデータサイズ（行数）
         //data: Option<Array2<f64>>, // データ
     }
 }
@@ -105,13 +107,12 @@ impl IsolationTree {
         // 閾値を決定
         let mut rng = thread_rng();
 
-        let split_val:f64;
-        if min == max {
-            split_val = min;
+        let split_val:f64 = if min == max {
+            min
         }
         else {
-            split_val = rng.gen_range(min..max);
-        }
+            rng.gen_range(min..max)
+        };
     
         // 行毎に対象の変数が閾値より小さいか大きいかで分割        
         let mut x_left:Array2<f64> = Array::zeros((0,x.ncols())); //　行数0で初期化
@@ -180,14 +181,13 @@ impl IsolationTreeEnsembleThread {
 
         match *node {
             IsolationNode::Decision {left, right, split_att, split_val}=> {
-                let direction;
                 // 対象の変数を取り出し、閾値の大小で枝を振り分ける。
-                if x.to_vec()[*split_att] < *split_val {
-                    direction = left;
+                let direction = if x.to_vec()[*split_att] < *split_val {
+                    left
                 }
                 else {
-                    direction = right;
-                }
+                    right
+                };
 
                 let result = Self::tree_path_length(Box::new(direction), x);
                 let length = result.0 + 1;
@@ -201,7 +201,9 @@ impl IsolationTreeEnsembleThread {
             }
             */
             IsolationNode::Leaf {size} => {
-                return (1, *size);
+                let length = 1;
+                let size = *size;
+                return (length, size);
             }
         }
     }
