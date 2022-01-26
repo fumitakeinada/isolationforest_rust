@@ -10,7 +10,7 @@ use rand_distr::{Distribution};
 extern crate statrs;
 
 
-use std::thread;
+use std::{thread, panic};
 //use std::time::Duration;
 use std::sync::{Arc, Mutex};
 //use std::rc::Rc;
@@ -28,10 +28,10 @@ pub enum IsolationNode {
         split_val: f64, // 境界値
     },
     // 葉の情報
-    // 末端のデータ自体は必要ないので、再構成する際はNoneを使用する。
+    // 末端のデータ自体は必要ない
     Leaf {
         size: usize, // データサイズ（行数）
-        data: Option<Array2<f64>>, // データ
+        //data: Option<Array2<f64>>, // データ
     }
 }
 
@@ -56,12 +56,12 @@ impl IsolationNode {
     // 葉（末端）の場合の処理
     fn new_leaf(
         size:usize, 
-        data:Option<Array2<f64>>
+        //data:Option<Array2<f64>>
         ) -> Box<IsolationNode>{
 
         let node = IsolationNode::Leaf {
             size: size, // データ数
-            data: data, // データ
+            //data: data, // データ
         };
         Box::new(node)
     }
@@ -85,7 +85,8 @@ impl IsolationTree {
         
         // データが孤立するか、指定の深さになった場合、葉を戻す。
          if x.nrows() <= 1 || self.height >= self.height_limit {
-            let node = IsolationNode::new_leaf(x.nrows(), Some(x));
+            //let node = IsolationNode::new_leaf(x.nrows(), Some(x));
+            let node = IsolationNode::new_leaf(x.nrows());            
             return Ok(node);
          }
         
@@ -194,7 +195,12 @@ impl IsolationTreeEnsembleThread {
         
                 return (length, branch_size);
             }
+            /*
             IsolationNode::Leaf {size, data:_ } => {
+                return (1, *size);
+            }
+            */
+            IsolationNode::Leaf {size} => {
                 return (1, *size);
             }
         }
@@ -244,12 +250,11 @@ impl IsolationTreeEnsembleThread {
                         let data = Self::make_isotree(&x_data, sample_size, height_limit);
                         match data {
                             Ok(ret) => (*tree_set).push(ret),
-                            Err(error) => {
-                                todo!();
-                            }
+                            Err(e) => panic!("ShapeError: {:?}",e),
                         };
                 }
             });
+            
             hdl.join().unwrap();
         }
         Ok(())
