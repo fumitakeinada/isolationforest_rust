@@ -11,10 +11,10 @@ extern crate statrs;
 
 
 use std::{thread, panic};
-//use std::time::Duration;
 use std::sync::{Arc, Mutex};
-//use std::rc::Rc;
 
+extern crate rayon;
+use rayon::prelude::*;
 
 // ノードデータ設定
 // 再帰処理が入るので、enumで定義
@@ -33,7 +33,6 @@ pub enum IsolationNode {
     // 末端のデータ自体は必要ない
     Leaf {
         size: usize, // 末端として残ったデータサイズ（行数）
-        //data: Option<Array2<f64>>, // データ
     }
 }
 
@@ -63,7 +62,6 @@ impl IsolationNode {
 
         let node = IsolationNode::Leaf {
             size: size, // データ数
-            //data: data, // データ
         };
         Box::new(node)
     }
@@ -87,7 +85,6 @@ impl IsolationTree {
         
         // データが孤立するか、指定の深さになった場合、葉を戻す。
          if x.nrows() <= 1 || self.height >= self.height_limit {
-            //let node = IsolationNode::new_leaf(x.nrows(), Some(x));
             let node = IsolationNode::new_leaf(x.nrows());            
             return Ok(node);
          }
@@ -130,20 +127,14 @@ impl IsolationTree {
             }
         }
 
-        // 枝を作成し、深さを1加える
-        let mut left = IsolationTree::new(self.height + 1, self.height_limit);
-        let mut right = IsolationTree::new(self.height + 1, self.height_limit);
+        // 枝を作成し、深さを1加え、分岐条件を設定し、枝を戻す。
+        let left_node = IsolationTree::new(self.height + 1, self.height_limit).fit(x_left)?;
+        let right_node = IsolationTree::new(self.height + 1, self.height_limit).fit(x_right)?;
 
-        // 分岐条件を設定し、枝を戻す。
-        // 要スレッド化
-        let left_node = left.fit(x_left)?;
-        let right_node = right.fit(x_right)?;
         let node = IsolationNode::new_decision(left_node, right_node, split_att, split_val);
         Ok(node)
     }
 }
-
-
 
 // アンサンブル学習用のツリー集合
 pub struct IsolationTreeEnsembleThread {
@@ -151,7 +142,6 @@ pub struct IsolationTreeEnsembleThread {
     n_trees: usize,
     tree_set: Arc<Mutex<Vec<IsolationNode>>>,
 }
-
 
 impl IsolationTreeEnsembleThread {
     pub fn new(sample_size:usize, n_trees:usize) -> Self{
@@ -195,11 +185,7 @@ impl IsolationTreeEnsembleThread {
         
                 return (length, decision_size);
             }
-            /*
-            IsolationNode::Leaf {size, data:_ } => {
-                return (1, *size);
-            }
-            */
+
             IsolationNode::Leaf {size} => {
                 let length = 1;
                 let size = *size;
@@ -251,6 +237,7 @@ impl IsolationTreeEnsembleThread {
                         let mut tree_set = tree_set.lock().unwrap();
                         let data = Self::make_isotree(&x_data, sample_size, height_limit);
                         match data {
+                            // 学習時はそれぞれの木はどの位置に入っても良い。
                             Ok(ret) => (*tree_set).push(ret),
                             Err(e) => panic!("ShapeError: {:?}",e),
                         };
@@ -264,16 +251,19 @@ impl IsolationTreeEnsembleThread {
 
     // 行毎の長さの平均を算出
     fn get_path_length_mean(&self, row:ArrayView1<f64>)-> f64{
-        let mut path:Vec<f64>= Vec::new();
+
         let tree_set = self.tree_set.lock().unwrap();
-        // 要スレッド化
-        for tree in tree_set.iter() {
-            let result = Self::tree_path_length(Box::new(tree), row);
-            // 孤立する前に既定の深さに達した場合、調整
-            let result_decision_size = result.1;
-            let pathlength = (result.0 as f64) + Self::c(result_decision_size);
-            path.push(pathlength);
-        }
+
+        // rayonによるスレッド化
+        let path:Vec<f64> = tree_set
+            .par_iter()
+            .map(|tree| {
+                let result = Self::tree_path_length(Box::new(tree), row);
+                // 孤立する前に既定の深さに達した場合、調整
+                (result.0 as f64) + Self::c(result.1)            
+            })
+            .collect();
+
         // データごとの平均値の算出
         let mut sum: f64 = 0.0;
         for j in path.iter() {
@@ -285,31 +275,28 @@ impl IsolationTreeEnsembleThread {
 
     // データ毎の長さの平均を算出
     fn path_length_mean(&self, x:Array2<f64>) -> Vec<f64>{
-        // 各データの深さの平均の格納場所
-        let mut paths_mean:Vec<f64> = Vec::with_capacity(x.nrows());
-
         // 各データをツリーに当てはめる
-        // スレッド化検討
-        for i in 0..x.nrows(){
-            let path_mean:f64 = self.get_path_length_mean(x.row(i));
-            paths_mean.insert(i,path_mean);
-        }
+        // rayonによるスレッド化
+        let x_rows: Vec<_> = x.outer_iter().collect();
+        // 各データの深さの平均の格納場所
+        let paths_mean: Vec<f64> = x_rows
+            .par_windows(1) //一つずつ取り出し
+            .map(|w| self.get_path_length_mean(w[0]))
+            .collect();
         paths_mean
     }
 
     // 異常度の算出
     pub fn anomaly_score(&mut self, x:Array2<f64>)  -> Vec<f64> {
         // 各データの深さの平均を算出し、異常値スコアを算出
+        let sample_size = self.sample_size;    
         let paths_mean = self.path_length_mean(x);
-        let mut anomaly_scores:Vec<f64> = Vec::with_capacity(paths_mean.len());
-        let sample_size = self.sample_size;
- 
-        for (i,l) in paths_mean.iter().enumerate() {
-            let c_val = Self::c(sample_size);
-            let score =  (2. as f64).powf((-1.* l)/(c_val as f64));
-            anomaly_scores.insert(i, score);
-        }
 
+        // rayonによるスレッド化
+        let anomaly_scores:Vec<f64> = paths_mean
+            .par_iter()
+            .map(|l| (2. as f64).powf((-1.* l)/(Self::c(sample_size) as f64)))
+            .collect();
         anomaly_scores
     }
 
