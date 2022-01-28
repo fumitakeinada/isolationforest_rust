@@ -16,10 +16,13 @@ use std::sync::{Arc, Mutex};
 extern crate rayon;
 use rayon::prelude::*;
 
+use serde::{Serialize, Deserialize};
+
 // ノードデータ設定
 // 再帰処理が入るので、enumで定義
 // 途中は2分木要素、末端は葉要素として定義
-#[derive(Debug)]
+//#[derive(Debug)]
+#[derive(Serialize, Deserialize)]
 pub enum IsolationNode {
     // 2分木の枝の情報
     Decision {
@@ -69,6 +72,7 @@ impl IsolationNode {
 
 
 // アイソレーションフォレストの木の処理
+#[derive(Serialize, Deserialize)]
 pub struct IsolationTree {
     height: u32, // 深さ
     height_limit: u32, // 深さの最大値
@@ -137,10 +141,11 @@ impl IsolationTree {
 }
 
 // アンサンブル学習用のツリー集合
+#[derive(Serialize, Deserialize)]
 pub struct IsolationTreeEnsembleThread {
     sample_size: usize,
     n_trees: usize,
-    tree_set: Arc<Mutex<Vec<IsolationNode>>>,
+    tree_set: Vec<IsolationNode>,    
 }
 
 impl IsolationTreeEnsembleThread {
@@ -148,7 +153,7 @@ impl IsolationTreeEnsembleThread {
         IsolationTreeEnsembleThread {
             sample_size: sample_size, 
             n_trees:n_trees, 
-            tree_set: Arc::new(Mutex::new(Vec::new())),
+            tree_set: Vec::new(),            
         }
     }
 
@@ -194,19 +199,21 @@ impl IsolationTreeEnsembleThread {
         }
     }
 
-    fn make_isotree(x:&Arc<Array2<f64>>, sample_size:usize, height_limit:u32) -> Result<IsolationNode, ShapeError>{
+    fn make_isotree(x:&Array2<f64>, sample_size:usize, height_limit:u32) -> Result<IsolationNode, ShapeError>{        
         // 指定の件数分をランダムにデータ抽出（重複あり）
         let mut rng = thread_rng();
         let data_range = Uniform::new_inclusive(0, x.nrows() - 1);
         let data_rows: Vec<usize> = data_range.sample_iter(&mut rng).take(sample_size).collect();
         let mut random_data:Array2<f64> = Array::zeros((0,x.ncols()));
-        for j in data_rows.iter(){
-            random_data.push_row(x.row(*j))?;
+
+        for i in data_rows.iter(){
+            random_data.push_row(x.row(*i))?;
         }
-        
+
         // 一つのIsolationTreeを作成
         let mut isotree = IsolationTree::new(0, height_limit);
         let data_node = isotree.fit(random_data)?;
+        
         Ok(*data_node)
     }
 
@@ -224,38 +231,24 @@ impl IsolationTreeEnsembleThread {
         let sample_size = self.sample_size;
 
         // 指定数のIsolationTreeの作成
-        let n_trees = self.n_trees;
-        let x_data = Arc::new(x);
-        let tree_set = &self.tree_set;
-
-        // スレッド化
-        for _ in 0..n_trees{
-            let hdl = thread::spawn({
-                let x_data = x_data.clone();
-                let tree_set = tree_set.clone();
-                    move || {
-                        let mut tree_set = tree_set.lock().unwrap();
-                        let data = Self::make_isotree(&x_data, sample_size, height_limit);
-                        match data {
-                            // 学習時はそれぞれの木はどの位置に入っても良い。
-                            Ok(ret) => (*tree_set).push(ret),
-                            Err(e) => panic!("ShapeError: {:?}",e),
-                        };
+        self.tree_set = (0..self.n_trees)
+            .into_par_iter()
+            .map(|_| 
+            {
+                let data = Self::make_isotree(&x, sample_size, height_limit);
+                match data {
+                    Ok(ret) => ret,
+                    Err(e) => panic!("ShapeError: {:?}",e),
                 }
-            });
-            
-            hdl.join().unwrap();
-        }
+            })
+            .collect();
+
         Ok(())
     }
-
     // 行毎の長さの平均を算出
     fn get_path_length_mean(&self, row:ArrayView1<f64>)-> f64{
-
-        let tree_set = self.tree_set.lock().unwrap();
-
-        // rayonによるスレッド化
-        let path:Vec<f64> = tree_set
+        //rayonによるスレッド化
+        let path:Vec<f64> = self.tree_set
             .par_iter()
             .map(|tree| {
                 let result = Self::tree_path_length(Box::new(tree), row);
